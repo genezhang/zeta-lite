@@ -2,17 +2,28 @@
 # Fetch the published zeta-lite wasm artifact into playground/pkg-web/.
 #
 # The compiled engine (zeta_wasm_bg.wasm + wasm-bindgen JS glue) is NOT committed
-# to this repo. It is published to npm as `zeta-lite` and attached to GitHub
-# Releases. This script pulls the web-target build so the playground can run
-# locally without a Rust/wasm toolchain.
+# to this repo. It is built in the closed Zeta monorepo and attached to this
+# repo's GitHub Releases as loose files with a SHA256SUMS manifest. This script
+# pulls the web-target build so the playground can run without a Rust/wasm
+# toolchain.
 #
-# Usage:
-#   ./scripts/fetch-artifact.sh            # latest published npm version
-#   ./scripts/fetch-artifact.sh v0.1.0     # a specific release tag
-#   ZETA_LITE_PKG=/path/to/pkg-web ./scripts/fetch-artifact.sh   # copy from a local build
+# Sources (in order of how you select them):
+#   ./scripts/fetch-artifact.sh v0.1.0        # from GitHub Release tag v0.1.0
+#   ./scripts/fetch-artifact.sh               # from the latest GitHub Release
+#   ZETA_LITE_PKG=/path/to/pkg-web ./scripts/fetch-artifact.sh   # from a local build
+#   ZETA_LITE_SOURCE=npm ./scripts/fetch-artifact.sh v0.1.0      # from npm (future)
 #
-# Requires: npm (default path) OR a local pkg-web dir via ZETA_LITE_PKG.
+# The GitHub-Release path uses plain curl against public release-asset URLs and
+# verifies every file against the release's SHA256SUMS (fails closed on any
+# mismatch or missing file). It works once the release is PUBLIC. Before launch,
+# while the repo is still private, release assets are not reachable by anonymous
+# curl — use the ZETA_LITE_PKG local path to smoke-test against your local build.
+#
+# Requires: curl + sha256sum (GitHub-Release path), or a local pkg-web dir via
+# ZETA_LITE_PKG, or npm (ZETA_LITE_SOURCE=npm).
 set -euo pipefail
+
+repo_slug="${ZETA_LITE_REPO:-genezhang/zeta-lite}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -24,22 +35,28 @@ mkdir -p "$dest"
 # output set.
 files=(zeta_wasm.js zeta_wasm_bg.wasm zeta_wasm.d.ts zeta_wasm_bg.wasm.d.ts)
 
-# The third-party license notices legally travel WITH the .wasm. Copied
-# best-effort (warn, don't fail) so an older artifact that predates the notices
-# file doesn't break the fetch — but a current artifact always carries it.
-notices_file="THIRD-PARTY-NOTICES.txt"
+# These travel WITH the .wasm but are not imported by the playground:
+#   - THIRD-PARTY-NOTICES.txt : third-party license notices (legally required).
+#   - build-info.json         : provenance — which monorepo commit / zeta-wasm
+#                               tag produced this artifact, for bug triage.
+# Copied best-effort (warn, don't fail) so an older artifact that predates them
+# doesn't break the fetch — but a current artifact always carries both.
+sidecar_files=(THIRD-PARTY-NOTICES.txt build-info.json)
 
 if [[ -n "${ZETA_LITE_PKG:-}" ]]; then
   echo "==> copying artifact from local build: $ZETA_LITE_PKG"
   for f in "${files[@]}"; do
     cp "$ZETA_LITE_PKG/$f" "$dest/$f"
   done
-  if [[ -f "$ZETA_LITE_PKG/$notices_file" ]]; then
-    cp "$ZETA_LITE_PKG/$notices_file" "$dest/$notices_file"
-  else
-    echo "    (warning: $notices_file not found in build — should ship with the .wasm)" >&2
-  fi
-else
+  for f in "${sidecar_files[@]}"; do
+    if [[ -f "$ZETA_LITE_PKG/$f" ]]; then
+      cp "$ZETA_LITE_PKG/$f" "$dest/$f"
+    else
+      echo "    (warning: $f not found in build — should ship with the .wasm)" >&2
+    fi
+  done
+
+elif [[ "${ZETA_LITE_SOURCE:-github}" == "npm" ]]; then
   ver="${1:-latest}"
   # npm dist-tags use bare versions; strip a leading v from a git-style tag.
   ver="${ver#v}"
@@ -103,19 +120,104 @@ else
       exit 1
     fi
   done
-  # The notices file ships at the tarball's package root (npm `files` list); it
-  # may not be inside a pkg-web/ subdir. Copy best-effort from either location.
-  if [[ -f "$srcdir/$notices_file" ]]; then
-    cp "$srcdir/$notices_file" "$dest/$notices_file"
-  elif [[ -f "$tmp/package/$notices_file" ]]; then
-    cp "$tmp/package/$notices_file" "$dest/$notices_file"
-  else
-    echo "    (warning: $notices_file not found in package — should ship with the .wasm)" >&2
+  # Sidecars ship at the tarball's package root (npm `files` list); they may not
+  # be inside a pkg-web/ subdir. Copy best-effort from either location.
+  for f in "${sidecar_files[@]}"; do
+    if [[ -f "$srcdir/$f" ]]; then
+      cp "$srcdir/$f" "$dest/$f"
+    elif [[ -f "$tmp/package/$f" ]]; then
+      cp "$tmp/package/$f" "$dest/$f"
+    else
+      echo "    (warning: $f not found in package — should ship with the .wasm)" >&2
+    fi
+  done
+
+else
+  # Default: GitHub Release. Download loose assets by URL and verify every one
+  # against the release's SHA256SUMS manifest (fail closed).
+  tag="${1:-}"
+  if [[ -z "$tag" ]]; then
+    echo "==> resolving latest GitHub Release of $repo_slug"
+    # The /releases/latest web URL redirects to /releases/tag/<tag>; read the
+    # final URL to learn the tag without needing jq or the gh CLI.
+    latest_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$repo_slug/releases/latest" 2>/dev/null || true)"
+    tag="${latest_url##*/tag/}"
+    if [[ -z "$tag" || "$tag" == "$latest_url" ]]; then
+      echo "!! could not resolve a latest release for $repo_slug." >&2
+      echo "   Pass an explicit tag (e.g. v0.1.0), or if the repo/release is still" >&2
+      echo "   private, smoke-test with ZETA_LITE_PKG=/path/to/pkg-web instead." >&2
+      exit 1
+    fi
   fi
+  # Normalize to a v-prefixed tag (release tags are v0.1.0).
+  [[ "$tag" == v* ]] || tag="v$tag"
+  base="https://github.com/$repo_slug/releases/download/$tag"
+  echo "==> fetching zeta-lite $tag from GitHub Release assets"
+
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+
+  # The integrity manifest is mandatory on this path — no manifest, no trust.
+  if ! curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+    echo "!! could not download $base/SHA256SUMS" >&2
+    echo "   The release may be private (anonymous curl can't read private" >&2
+    echo "   assets — use ZETA_LITE_PKG for local testing), the tag may be" >&2
+    echo "   wrong, or the release may not carry a SHA256SUMS manifest." >&2
+    exit 1
+  fi
+
+  # Download every asset named in the manifest (core files + whatever sidecars
+  # the release shipped), so verification covers exactly what's published.
+  manifest_names=()
+  while read -r _sum name; do
+    [[ -z "$name" ]] && continue
+    name="${name#\*}"   # sha256sum manifests may prefix binary files with '*'
+    manifest_names+=("$name")
+  done < "$tmp/SHA256SUMS"
+
+  for f in "${manifest_names[@]}"; do
+    if ! curl -fsSL "$base/$f" -o "$tmp/$f"; then
+      echo "!! listed in SHA256SUMS but not downloadable: $f" >&2
+      exit 1
+    fi
+  done
+
+  # Fail closed on any checksum mismatch or missing file.
+  echo "    verifying SHA256SUMS…"
+  if ! ( cd "$tmp" && sha256sum -c --strict SHA256SUMS ); then
+    echo "!! checksum verification FAILED — refusing to install." >&2
+    exit 1
+  fi
+
+  # Required web-target files must all be present in the verified set.
+  for f in "${files[@]}"; do
+    if [[ -f "$tmp/$f" ]]; then
+      cp "$tmp/$f" "$dest/$f"
+    else
+      echo "!! $f not present in the release assets (SHA256SUMS listed:" >&2
+      printf '   %s\n' "${manifest_names[@]}" >&2
+      exit 1
+    fi
+  done
+  # Sidecars: copy if the release carried them (they should).
+  for f in "${sidecar_files[@]}"; do
+    if [[ -f "$tmp/$f" ]]; then
+      cp "$tmp/$f" "$dest/$f"
+    else
+      echo "    (warning: $f not in release assets — should ship with the .wasm)" >&2
+    fi
+  done
 fi
 
 echo "==> done. Artifact in $dest:"
 ls -la "$dest"
+if [[ -f "$dest/build-info.json" ]]; then
+  echo
+  echo "Provenance (build-info.json):"
+  cat "$dest/build-info.json"
+  echo
+fi
 echo
 echo "Run the playground:"
 echo "  python3 -m http.server -d playground 8080   # then open http://localhost:8080"
