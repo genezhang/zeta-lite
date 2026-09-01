@@ -37,8 +37,9 @@ a single thread.
 | `docs/sql_reference.md` | The SQL surface reachable from this build | Zeta Lite License |
 
 The compiled `zeta_wasm_bg.wasm` engine artifact is **not committed** to this
-repo. It is published to npm (`zeta-lite`) and attached to GitHub Releases; the
-scripts below fetch it into `playground/pkg-web/` for local use.
+repo. It is attached to this repo's **GitHub Releases** as loose files with a
+`SHA256SUMS` manifest; the scripts below fetch and verify it into
+`playground/pkg-web/` for local use.
 
 ---
 
@@ -63,14 +64,15 @@ isn't in this build — see [`docs/sql_reference.md`](docs/sql_reference.md).
 
 ---
 
-## Use as a library (npm)
+## Use as a library
 
-```bash
-npm install zeta-lite
-```
+> **v0.1 ships via GitHub Releases, not npm yet.** For now, fetch the artifact
+> (above) and import `playground/pkg-web/zeta_wasm.js` directly, or point your
+> bundler at that directory. An `npm install zeta-lite` package is planned for a
+> later release; the API below is what it will expose.
 
 ```js
-import { ZetaDb } from "zeta-lite";
+import { ZetaDb } from "./pkg-web/zeta_wasm.js";  // npm: from "zeta-lite" (planned)
 
 const db = ZetaDb.open();
 
