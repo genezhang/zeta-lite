@@ -544,7 +544,7 @@ repository without engine-source access; the two throughput/concurrency benches 
 the recorded soak-test output are in `docs/benchmarks/` [10].
 
 **Setup.** One machine (AMD Ryzen AI MAX+ 395, 32 threads, of which the engine uses
-one), artifact `zeta_wasm_bg.wasm` at 10,144,082 bytes raw / **2.87 MB gzipped**.
+one), artifact `zeta_wasm_bg.wasm` at ~9.7 MB raw / **2.87 MB gzipped**.
 Browser targets: Chrome 152 (V8) and Firefox 154 (SpiderMonkey); native reference:
 bun 1.3.14. The engine is single-threaded throughout — `crossOriginIsolated` is
 `false` and no `SharedArrayBuffer` is used, which the bench prints to make the

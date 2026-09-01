@@ -27,6 +27,9 @@
 % little slack so it can avoid running them into the margin.
 \emergencystretch=3em
 
+% Render a DOI as a hyperlinked doi.org URL in references.
+\newcommand{\doi}[1]{\href{https://doi.org/#1}{doi:#1}}
+
 % SQL listing style — mirrors the shipped branching example.
 \definecolor{codebg}{gray}{0.97}
 \definecolor{codecomment}{rgb}{0.35,0.45,0.35}
@@ -630,7 +633,7 @@ benches and the recorded soak-test output are in
 
 \paragraph{Setup.}
 One machine (AMD Ryzen AI MAX+ 395, 32 threads, of which the engine uses one),
-artifact \texttt{zeta\_wasm\_bg.wasm} at 10,144,082 bytes raw / \textbf{2.87\,MB
+artifact \texttt{zeta\_wasm\_bg.wasm} at ${\sim}9.7$\,MB raw / \textbf{2.87\,MB
 gzipped}. Browser targets: Chrome 152 (V8) and Firefox 154 (SpiderMonkey); native
 reference: bun 1.3.14. The engine is single-threaded throughout ---
 \texttt{crossOriginIsolated} is \texttt{false} and no \texttt{SharedArrayBuffer} is
@@ -915,8 +918,9 @@ Databases in 2026.}
 PGlite $\sim$3.3\,MB gzipped.
 
 \bibitem{berenson} H. Berenson, P. Bernstein, J. Gray, J. Melton, E. O'Neil, and P.
-O'Neil. \emph{A Critique of ANSI SQL Isolation Levels.} Proc. ACM SIGMOD, 1995, pp.
-1--10.
+O'Neil. \emph{A Critique of ANSI SQL Isolation Levels.} In Proc.\ 1995 ACM SIGMOD
+International Conference on Management of Data (SIGMOD '95), San Jose, CA, pp.\
+1--10. \doi{10.1145/223784.223785}.
 
 \bibitem{dolt} DoltHub. \emph{Dolt --- Git for Data} (version-controlled SQL
 database: branch, diff, merge). \url{https://github.com/dolthub/dolt} (accessed
