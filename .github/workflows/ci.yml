@@ -1,0 +1,30 @@
+name: CI
+
+# The compiled engine artifact is not present in this repo (fetched from a
+# release), so CI exercises the open, hand-authored playground glue only: the
+# router/editor unit tests that run under a JS runtime with no wasm import.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  playground-tests:
+    name: Playground glue (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # The router and editor unit tests are pure (no DOM, no wasm import), so
+      # node's built-in test runner exercises them directly. The engine-driven
+      # validation harness (playground_validate.mjs) needs the fetched wasm and
+      # runs in the artifact/release verification flow, not here.
+      - name: router + editor unit tests
+        run: |
+          node --test playground/console/router.test.mjs
+          if [ -f playground/console/editor.test.mjs ]; then \
+            node --test playground/console/editor.test.mjs; \
+          fi

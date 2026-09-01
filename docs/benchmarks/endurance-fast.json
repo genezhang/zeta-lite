@@ -1,0 +1,315 @@
+{
+  "config": {
+    "fast": true,
+    "rows": 20000,
+    "sustainedMs": 120000,
+    "warmupMs": 5000,
+    "branchMs": 30000,
+    "snapshotEveryMs": 15000,
+    "readerEveryMs": 5000,
+    "readerWindowMs": 20000,
+    "bucketMs": 5000,
+    "drainMs": 15000,
+    "settleMs": 30000,
+    "settleMemBudgetMB": 32,
+    "rate": 1500,
+    "stabilityFloor": 0.7
+  },
+  "totals": {
+    "sustainedOps": 180000,
+    "branchIterations": 4250,
+    "snapshotCycles": 8,
+    "durationS": 200
+  },
+  "perClass": {
+    "point_read": {
+      "ops": 111208,
+      "meanUs": 5,
+      "p50Us": 4,
+      "p95Us": 6,
+      "p99Us": 8,
+      "minUs": 3,
+      "maxUs": 1536
+    },
+    "range_scan": {
+      "ops": 27167,
+      "meanUs": 48,
+      "p50Us": 46,
+      "p95Us": 57,
+      "p99Us": 74,
+      "minUs": 25,
+      "maxUs": 24264
+    },
+    "insert": {
+      "ops": 9120,
+      "meanUs": 10,
+      "p50Us": 9,
+      "p95Us": 14,
+      "p99Us": 24,
+      "minUs": 6,
+      "maxUs": 222
+    },
+    "update": {
+      "ops": 18137,
+      "meanUs": 13,
+      "p50Us": 12,
+      "p95Us": 20,
+      "p99Us": 37,
+      "minUs": 4,
+      "maxUs": 404
+    },
+    "delete": {
+      "ops": 5378,
+      "meanUs": 20,
+      "p50Us": 19,
+      "p95Us": 30,
+      "p99Us": 63,
+      "minUs": 4,
+      "maxUs": 166
+    },
+    "txn": {
+      "ops": 8990,
+      "meanUs": 56,
+      "p50Us": 51,
+      "p95Us": 87,
+      "p99Us": 158,
+      "minUs": 36,
+      "maxUs": 428
+    }
+  },
+  "throughput": {
+    "firstQuarterOpsS": 1500,
+    "lastQuarterOpsS": 1500,
+    "stability": 0.9999555575307765
+  },
+  "memory": {
+    "sustainedFirst60sMB": 336,
+    "sustainedLast60sMB": 796,
+    "sustainedGrowthMB": 460.4,
+    "drainRssMB": 908,
+    "settleGrowthMB": 8,
+    "settleRssCurveMB": [
+      908,
+      908,
+      912,
+      909,
+      909,
+      910,
+      910,
+      910,
+      915,
+      911,
+      911,
+      912,
+      912,
+      912,
+      912,
+      913,
+      913,
+      913,
+      913,
+      914,
+      914,
+      914,
+      914,
+      915,
+      915,
+      915,
+      915,
+      916,
+      916,
+      916,
+      916
+    ]
+  },
+  "buckets": [
+    {
+      "t": 292,
+      "phase": "sustained",
+      "ops": 7501,
+      "rss": 246
+    },
+    {
+      "t": 5292,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 242
+    },
+    {
+      "t": 10292,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 288
+    },
+    {
+      "t": 15292,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 317
+    },
+    {
+      "t": 20292,
+      "phase": "sustained",
+      "ops": 7501,
+      "rss": 347
+    },
+    {
+      "t": 25293,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 382
+    },
+    {
+      "t": 30330,
+      "phase": "sustained",
+      "ops": 7557,
+      "rss": 420
+    },
+    {
+      "t": 35331,
+      "phase": "sustained",
+      "ops": 7501,
+      "rss": 446
+    },
+    {
+      "t": 40331,
+      "phase": "sustained",
+      "ops": 7442,
+      "rss": 485
+    },
+    {
+      "t": 45333,
+      "phase": "sustained",
+      "ops": 7561,
+      "rss": 508
+    },
+    {
+      "t": 50333,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 539
+    },
+    {
+      "t": 55333,
+      "phase": "sustained",
+      "ops": 7440,
+      "rss": 570
+    },
+    {
+      "t": 60336,
+      "phase": "sustained",
+      "ops": 7565,
+      "rss": 600
+    },
+    {
+      "t": 65337,
+      "phase": "sustained",
+      "ops": 7501,
+      "rss": 630
+    },
+    {
+      "t": 70337,
+      "phase": "sustained",
+      "ops": 7435,
+      "rss": 662
+    },
+    {
+      "t": 75338,
+      "phase": "sustained",
+      "ops": 7566,
+      "rss": 692
+    },
+    {
+      "t": 80338,
+      "phase": "sustained",
+      "ops": 7501,
+      "rss": 723
+    },
+    {
+      "t": 85339,
+      "phase": "sustained",
+      "ops": 7434,
+      "rss": 761
+    },
+    {
+      "t": 90341,
+      "phase": "sustained",
+      "ops": 7570,
+      "rss": 791
+    },
+    {
+      "t": 95341,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 820
+    },
+    {
+      "t": 100341,
+      "phase": "sustained",
+      "ops": 7430,
+      "rss": 818
+    },
+    {
+      "t": 105345,
+      "phase": "sustained",
+      "ops": 7576,
+      "rss": 819
+    },
+    {
+      "t": 110345,
+      "phase": "sustained",
+      "ops": 7500,
+      "rss": 818
+    },
+    {
+      "t": 115345,
+      "phase": "sustained",
+      "ops": 7424,
+      "rss": 821
+    }
+  ],
+  "snapshotCycles": [
+    {
+      "t": 15296,
+      "blobBytes": 1350459,
+      "ms": 40
+    },
+    {
+      "t": 30293,
+      "blobBytes": 1441193,
+      "ms": 37
+    },
+    {
+      "t": 45293,
+      "blobBytes": 1532946,
+      "ms": 40
+    },
+    {
+      "t": 60293,
+      "blobBytes": 1625589,
+      "ms": 43
+    },
+    {
+      "t": 75294,
+      "blobBytes": 1715537,
+      "ms": 44
+    },
+    {
+      "t": 90295,
+      "blobBytes": 1806311,
+      "ms": 46
+    },
+    {
+      "t": 105295,
+      "blobBytes": 1897217,
+      "ms": 50
+    },
+    {
+      "t": 120295,
+      "blobBytes": 1987491,
+      "ms": 53
+    }
+  ],
+  "failures": [],
+  "pass": true
+}

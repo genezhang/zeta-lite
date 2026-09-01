@@ -1,0 +1,101 @@
+Zeta Lite License
+Version 1.0
+
+Copyright (c) 2026 Gene Zhang. All rights reserved.
+
+────────────────────────────────────────────────────────────────────────────
+
+PREAMBLE
+
+Zeta Lite is a WebAssembly build of the Zeta database engine, intended to run
+in a web browser (or a WASI host). It is free to use — including for
+commercial purposes — at no charge. It is not open source: the engine source
+code is not included in this distribution, and a few narrow restrictions apply
+(see RESTRICTIONS below).
+
+This license covers the compiled Zeta Lite artifact and the hand-authored
+materials distributed with it. The engine source code lives in a separate,
+closed repository and is available only to parties under a separate
+Non-Disclosure Agreement and arrangement; nothing here grants access to that
+source.
+
+────────────────────────────────────────────────────────────────────────────
+
+ACCEPTANCE
+
+By downloading, installing, running, or redistributing the compiled Zeta Lite
+artifact (the `.wasm` file and its accompanying JavaScript/TypeScript glue,
+collectively the "Software"), you agree to be bound by the terms of this
+license. If you do not agree, do not use the Software.
+
+────────────────────────────────────────────────────────────────────────────
+
+FREE USE GRANT
+
+Subject to the restrictions below, you are granted a non-exclusive,
+royalty-free, worldwide license to use, copy, run, integrate, and redistribute
+the compiled Software for any purpose — including personal projects, internal
+business applications, and commercial products — at no charge.
+
+There is no fee, and no separate license is required based on the size of your
+organization, your revenue, or whether your use is commercial. You may embed
+the Software in your own applications and distribute those applications freely.
+
+────────────────────────────────────────────────────────────────────────────
+
+RESTRICTIONS
+
+You may not:
+
+1. Remove, alter, or obscure any copyright, license, or attribution notice
+   included with the Software.
+
+2. Reverse engineer, decompile, or disassemble the compiled `.wasm` artifact,
+   or otherwise attempt to derive the engine source code from it, except to the
+   extent this restriction is unenforceable under applicable law.
+
+3. Use the Software, or knowledge derived from it, to build or assist in
+   building a competing database product.
+
+────────────────────────────────────────────────────────────────────────────
+
+THIRD-PARTY COMPONENTS
+
+Materials distributed alongside the Software may include third-party components
+under their own licenses — for example, the playground bundles CodeMirror under
+the MIT license (see `playground/vendor/LICENSE-codemirror`). Those components
+remain under their original licenses; nothing here restricts your rights in
+them, and this license does not extend to them.
+
+────────────────────────────────────────────────────────────────────────────
+
+DISCLAIMER OF WARRANTIES
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. THE ENTIRE RISK
+AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU. THIS IS
+PRE-RELEASE SOFTWARE.
+
+────────────────────────────────────────────────────────────────────────────
+
+LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, LOSS OF DATA, LOSS OF
+PROFITS, OR BUSINESS INTERRUPTION) ARISING OUT OF OR IN CONNECTION WITH THE USE
+OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGES.
+
+────────────────────────────────────────────────────────────────────────────
+
+FUTURE VERSIONS
+
+The copyright holder reserves the right to publish updated versions of this
+license. Copies of the Software released under a prior version remain subject to
+that version unless you choose to upgrade.
+
+────────────────────────────────────────────────────────────────────────────
+
+For licensing questions or engine-source access: genegzhang@gmail.com

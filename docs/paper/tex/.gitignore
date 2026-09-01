@@ -1,0 +1,18 @@
+# LaTeX build artifacts — the sources are main.tex + figures/*.pdf
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+*.toc
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+# Keep main.pdf out of git (regenerable); the arXiv tarball is built on demand.
+main.pdf
+# The submission tarball and arXiv hint file are build products.
+arxiv-zeta-lite.tar.gz
+00README.XXX

@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 905" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7.5,3 L0,6 z" fill="#333"/>
+    </marker>
+    <marker id="caparrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7.5,3 L0,6 z" fill="#7a5aa8"/>
+    </marker>
+    <style>
+      .title{font-size:12.5px;fill:#4a4a5a;font-style:italic}
+      .node{font-size:13px;fill:#1f2430}
+      .nodeb{font-size:13px;fill:#1f2430;font-weight:600}
+      .elab{font-size:11px;fill:#6a5a8a}
+      .elabk{font-size:11px;fill:#3a3a46;font-weight:600}
+      .leg{font-size:11.5px;fill:#555}
+      .solid{fill:none;stroke:#333;stroke-width:1.7}
+      .assoc{fill:none;stroke:#8a8a96;stroke-width:1.3;stroke-dasharray:3 3}
+      .cap{fill:none;stroke:#7a5aa8;stroke-width:1.5;stroke-dasharray:6 4}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1060" height="905" fill="#ffffff"/>
+
+  <!-- ============ BAND 1: BROWSER HOST ============ -->
+  <rect x="20" y="26" width="1020" height="252" rx="9" fill="#f4f8ff" stroke="#b9cdec"/>
+  <text class="title" x="40" y="48">Browser host (main thread, JavaScript) — the driver</text>
+
+  <!-- Application node -->
+  <rect x="70" y="92" width="300" height="106" rx="6" fill="#fdf1da" stroke="#cf9a3c"/>
+  <text class="nodeb" text-anchor="middle" x="220" y="130">Application / AI agent</text>
+  <text class="node" text-anchor="middle" x="220" y="152">ZetaDb · ZetaTxn · ZetaCursor</text>
+  <text class="node" text-anchor="middle" x="220" y="170">(JS API)</text>
+
+  <!-- Web platform APIs subgroup -->
+  <rect x="470" y="72" width="550" height="190" rx="8" fill="#eaf1fd" stroke="#86a6dd"/>
+  <text class="title" x="490" y="96">Web platform APIs — the “system interface”</text>
+  <rect x="502" y="150" width="150" height="92" rx="6" fill="#d9e6fb" stroke="#3f6fc0"/>
+  <text class="nodeb" text-anchor="middle" x="577" y="190">OPFS</text>
+  <text class="node" text-anchor="middle" x="577" y="210">navigator.storage</text>
+  <rect x="672" y="150" width="184" height="92" rx="6" fill="#d9e6fb" stroke="#3f6fc0"/>
+  <text class="nodeb" text-anchor="middle" x="764" y="190">WebCrypto</text>
+  <text class="node" text-anchor="middle" x="764" y="210">crypto.getRandomValues</text>
+  <rect x="876" y="150" width="130" height="92" rx="6" fill="#d9e6fb" stroke="#3f6fc0"/>
+  <text class="nodeb" text-anchor="middle" x="941" y="190">performance</text>
+  <text class="nodeb" text-anchor="middle" x="941" y="210">.now</text>
+
+  <!-- ============ BAND 2: BINDING LAYER ============ -->
+  <rect x="20" y="316" width="1020" height="74" rx="9" fill="#f3ecfc" stroke="#a487d4"/>
+  <text class="title" x="40" y="338">wasm-bindgen binding layer (--target web) — the only boundary crossing</text>
+  <rect x="388" y="343" width="300" height="42" rx="6" fill="#e7d8fa" stroke="#8a63c7"/>
+  <text class="nodeb" text-anchor="middle" x="538" y="369">JS glue + injected host imports</text>
+
+  <!-- ============ BAND 3: WASM SANDBOX ============ -->
+  <rect x="20" y="430" width="1020" height="448" rx="9" fill="#f7f7fa" stroke="#c4c4ce"/>
+  <text class="title" x="40" y="452">WebAssembly sandbox — wasm32-unknown-unknown, single thread (no WASI, no Worker, no SharedArrayBuffer)</text>
+
+  <!-- API surface -->
+  <rect x="78" y="482" width="250" height="44" rx="6" fill="#ffffff" stroke="#9aa0aa"/>
+  <text class="node" text-anchor="middle" x="203" y="509">Engine JS-facing API surface</text>
+
+  <!-- Engine core group -->
+  <rect x="48" y="556" width="620" height="302" rx="8" fill="#edf7ed" stroke="#7cbb7c"/>
+  <text class="title" x="68" y="579">Zeta engine core (shared with the server build)</text>
+
+  <rect x="92" y="594" width="250" height="44" rx="6" fill="#ffffff" stroke="#3f9a3f"/>
+  <text class="node" text-anchor="middle" x="217" y="621">Parser → Planner → Optimizer</text>
+
+  <rect x="92" y="658" width="250" height="48" rx="6" fill="#ffffff" stroke="#3f9a3f"/>
+  <text class="node" text-anchor="middle" x="217" y="679">Vectorized executor +</text>
+  <text class="node" text-anchor="middle" x="217" y="696">streaming cursors</text>
+
+  <rect x="92" y="724" width="250" height="58" rx="6" fill="#ffffff" stroke="#3f9a3f"/>
+  <text class="nodeb" text-anchor="middle" x="217" y="746">Log-centric async MVCC</text>
+  <text class="node" text-anchor="middle" x="217" y="764">versioned rows · timestamps · SI</text>
+
+  <rect x="92" y="800" width="228" height="46" rx="6" fill="#ffffff" stroke="#3f9a3f"/>
+  <text class="node" text-anchor="middle" x="206" y="822">Memory backend</text>
+  <text class="node" text-anchor="middle" x="206" y="838">(in-linear-memory tables + catalog)</text>
+
+  <rect x="360" y="800" width="256" height="46" rx="6" fill="#ffffff" stroke="#3f9a3f"/>
+  <text class="node" text-anchor="middle" x="488" y="822">Branches</text>
+  <text class="node" text-anchor="middle" x="488" y="838">= fork timestamps over the log</text>
+
+  <!-- Snapshot codec -->
+  <rect x="726" y="786" width="224" height="70" rx="6" fill="#fdf1da" stroke="#cf9a3c"/>
+  <text class="nodeb" text-anchor="middle" x="838" y="815">Snapshot codec</text>
+  <text class="node" text-anchor="middle" x="838" y="833">exportSnapshot /</text>
+  <text class="node" text-anchor="middle" x="838" y="849">openFromSnapshot</text>
+
+  <!-- ============ SOLID: query path ============ -->
+  <path class="solid" marker-end="url(#arrow)" d="M220,198 C 285,300 405,340 494,343"/>
+  <path class="solid" marker-end="url(#arrow)" d="M500,386 C 380,430 250,466 205,480"/>
+  <path class="solid" marker-end="url(#arrow)" d="M203,526 C 206,552 215,576 217,592"/>
+  <path class="solid" marker-end="url(#arrow)" d="M217,638 L217,656"/>
+  <path class="solid" marker-end="url(#arrow)" d="M217,706 L217,722"/>
+  <path class="solid" marker-end="url(#arrow)" d="M217,782 L211,798"/>
+  <path class="solid" marker-end="url(#arrow)" d="M240,846 C 400,873 600,873 726,840"/>
+  <!-- association: MVCC to Branches -->
+  <path class="assoc" d="M300,778 C 380,792 430,798 458,802"/>
+
+  <!-- ============ DASHED: capability bindings ============ -->
+  <!-- into glue node bottom edge (y=385); lanes ordered to match landing order so they don't cross -->
+  <path class="cap" marker-end="url(#caparrow)" d="M342,682 C 430,682 452,560 452,470 C 452,420 550,392 590,387"/>
+  <path class="cap" marker-end="url(#caparrow)" d="M342,758 C 415,758 430,560 430,470 C 430,414 535,392 562,387"/>
+  <path class="cap" marker-end="url(#caparrow)" d="M838,786 C 862,636 725,455 655,387"/>
+  <!-- out of glue (to Web APIs) -->
+  <path class="cap" marker-end="url(#caparrow)" d="M516,343 C 536,300 558,266 577,246"/>
+  <path class="cap" marker-end="url(#caparrow)" d="M556,343 C 646,306 716,268 764,246"/>
+  <path class="cap" marker-end="url(#caparrow)" d="M600,343 C 760,308 882,266 941,246"/>
+
+  <!-- ============ edge labels ============ -->
+  <rect x="262" y="289" width="200" height="20" rx="10" fill="#ffffff" stroke="#e0e0e8"/>
+  <text class="elabk" text-anchor="middle" x="362" y="303">query · execMut · begin · stream</text>
+
+  <rect x="508" y="290" width="106" height="18" rx="9" fill="#f3ecfc"/>
+  <text class="elab" text-anchor="middle" x="561" y="303">persist / rehydrate</text>
+  <text class="elab" text-anchor="middle" x="690" y="292">randomness</text>
+  <text class="elab" text-anchor="middle" x="880" y="292">clock</text>
+
+  <text class="elab" text-anchor="middle" x="452" y="652">timing</text>
+  <text class="elab" text-anchor="middle" x="424" y="746">entropy</text>
+  <rect x="792" y="642" width="132" height="18" rx="9" fill="#f3ecfc"/>
+  <text class="elab" text-anchor="middle" x="858" y="655">snapshot blob (bytes)</text>
+  <text class="elab" text-anchor="middle" x="628" y="846">export</text>
+
+  <!-- ============ legend ============ -->
+  <line class="solid" x1="40" y1="892" x2="72" y2="892" marker-end="url(#arrow)"/>
+  <text class="leg" x="80" y="896">query path (JS API → engine)</text>
+  <line class="cap" x1="300" y1="892" x2="332" y2="892" marker-end="url(#caparrow)"/>
+  <text class="leg" x="340" y="896">capability binding — crosses the sandbox via wasm-bindgen and lands on a Web API, not a WASI syscall</text>
+</svg>

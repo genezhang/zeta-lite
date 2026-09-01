@@ -1,0 +1,179 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>zeta-lite browser benchmark</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 900px; }
+  h1 { font-size: 1.2rem; }
+  button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
+  #out { white-space: pre; background: #111; color: #d0d0d0; padding: 1rem; border-radius: 6px; overflow-x: auto; margin-top: 1rem; }
+  .env { color: #888; }
+  #copy { margin-top: .5rem; }
+</style>
+<h1>zeta-lite — in-browser throughput benchmark</h1>
+<p class="env">Loads the same <code>./pkg-web/zeta_wasm.js</code> the playground uses. Serve over http:// (not file://):
+<br><code>python3 -m http.server -d playground 8080</code> → open <code>http://localhost:8080/bench.html</code></p>
+<button id="run">Run benchmark</button>
+<button id="copy" hidden>Copy results</button>
+<div id="out">idle.</div>
+
+<script type="module">
+import init, { ZetaDb } from "./pkg-web/zeta_wasm.js";
+
+const out = document.getElementById("out");
+const lines = [];
+function log(s = "") { lines.push(s); out.textContent = lines.join("\n"); }
+const fmt = (n) => n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+const now = () => performance.now();
+
+function report(name, ops, ms, extra = "") {
+  const s = ms / 1000, rate = ops / s;
+  log(`${name.padEnd(40)} ${fmt(ops).padStart(9)} ops  ${s.toFixed(3).padStart(8)} s  ${fmt(rate).padStart(9)} ops/s  ${extra}`);
+  return rate;
+}
+
+async function bench() {
+  lines.length = 0;
+  await init();
+  log("=".repeat(96));
+  log("zeta-lite browser benchmark");
+  const ua = navigator.userAgent;
+  const cores = navigator.hardwareConcurrency ?? "?";
+  log(`UA: ${ua}`);
+  log(`hardwareConcurrency: ${cores}  (single-threaded engine; cores shown for context only)`);
+  log(`crossOriginIsolated: ${self.crossOriginIsolated}  (false is expected — no SharedArrayBuffer/threads)`);
+  log("=".repeat(96));
+  // yield to paint between phases
+  const yieldPaint = () => new Promise(r => setTimeout(r, 0));
+
+  // 1. serial INSERT, autocommit per op
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
+    const N = 50_000;
+    for (let i = 0; i < 1000; i++) db.execMut("INSERT INTO t VALUES ($1,$2)", [i, i]);
+    const t0 = now();
+    for (let i = 1000; i < 1000 + N; i++) db.execMut("INSERT INTO t VALUES ($1,$2)", [i, i * 3]);
+    report("1. serial INSERT (autocommit / op)", N, now() - t0);
+    db.free?.();
+  }
+  await yieldPaint();
+
+  // 2. INSERT inside one explicit txn
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
+    const N = 50_000;
+    const tx = db.begin();
+    const t0 = now();
+    for (let i = 0; i < N; i++) tx.execMut("INSERT INTO t VALUES ($1,$2)", [i, i]);
+    tx.commit();
+    report("2. INSERT inside one txn (amortized)", N, now() - t0);
+    db.free?.();
+  }
+  await yieldPaint();
+
+  // 3. point SELECT
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
+    const rows = 50_000;
+    const tx = db.begin();
+    for (let i = 0; i < rows; i++) tx.execMut("INSERT INTO t VALUES ($1,$2)", [i, i]);
+    tx.commit();
+    const N = 50_000;
+    for (let i = 0; i < 1000; i++) db.query("SELECT v FROM t WHERE id = $1", [i]);
+    const t0 = now();
+    let acc = 0;
+    for (let i = 0; i < N; i++) acc += db.query("SELECT v FROM t WHERE id = $1", [i % rows]).rows.length;
+    report("3. point SELECT (PK lookup)", N, now() - t0, `(rows_seen=${acc})`);
+    db.free?.();
+  }
+  await yieldPaint();
+
+  // 4. overlapping SI txns, disjoint keys => all commit
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
+    db.execMut("INSERT INTO t VALUES ($1,$2)", [0, 0]);
+    const K = 8, ROUNDS = 5000;
+    let commits = 0, conflicts = 0, ops = 0;
+    const t0 = now();
+    for (let r = 0; r < ROUNDS; r++) {
+      const txns = [];
+      for (let k = 0; k < K; k++) txns.push(db.begin());
+      for (let k = 0; k < K; k++) {
+        try { txns[k].execMut("INSERT INTO t VALUES ($1,$2)", [1 + r * K + k, k]); ops++; } catch {}
+      }
+      for (let k = 0; k < K; k++) { try { txns[k].commit(); commits++; } catch { conflicts++; } }
+    }
+    report("4. overlapping SI txns (K=8)", ops, now() - t0, `commits=${fmt(commits)} conflicts=${fmt(conflicts)}`);
+    db.free?.();
+  }
+  await yieldPaint();
+
+  // 4b. write-write conflict on a shared row => B must abort under SI
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
+    db.execMut("INSERT INTO t VALUES ($1,$2)", [1, 0]);
+    const ROUNDS = 5000;
+    let aCommit = 0, bCommit = 0, bAbort = 0;
+    const t0 = now();
+    for (let r = 0; r < ROUNDS; r++) {
+      const a = db.begin(), b = db.begin();
+      a.execMut("UPDATE t SET v = v + 1 WHERE id = 1");
+      let bWrote = true;
+      try { b.execMut("UPDATE t SET v = v + 100 WHERE id = 1"); } catch { bWrote = false; }
+      try { a.commit(); aCommit++; } catch {}
+      if (bWrote) { try { b.commit(); bCommit++; } catch { bAbort++; try { b.rollback(); } catch {} } }
+      else { try { b.rollback(); } catch {} bAbort++; }
+    }
+    report("4b. w-w conflict on shared row", ROUNDS * 2, now() - t0, `A=${fmt(aCommit)} Bok=${fmt(bCommit)} Babort=${fmt(bAbort)}`);
+    db.free?.();
+  }
+  await yieldPaint();
+
+  // 5. sustained endurance, fixed wall-clock, per-second drift
+  {
+    const db = ZetaDb.open();
+    db.execDdl("CREATE TABLE kv (id INTEGER PRIMARY KEY, v INTEGER)");
+    const SEED = 10_000;
+    const tx = db.begin();
+    for (let i = 0; i < SEED; i++) tx.execMut("INSERT INTO kv VALUES ($1,$2)", [i, i]);
+    tx.commit();
+    const BUDGET_MS = 10_000, WINDOW_MS = 1000;
+    let ops = 0, id = SEED;
+    const windows = [];
+    const start = now();
+    let winStart = start, winOps = 0;
+    while (true) {
+      db.execMut("INSERT INTO kv VALUES ($1,$2)", [id, id]); id++; ops++; winOps++;
+      for (let j = 0; j < 3; j++) { db.query("SELECT v FROM kv WHERE id = $1", [(id - j) % SEED]); ops++; winOps++; }
+      const t = now();
+      if (t - winStart >= WINDOW_MS) { windows.push(winOps / ((t - winStart) / 1000)); winStart = t; winOps = 0; }
+      if (t - start >= BUDGET_MS) break;
+    }
+    report("5. ENDURANCE mixed R/W (sustained)", ops, now() - start);
+    const min = Math.min(...windows), max = Math.max(...windows);
+    const mean = windows.reduce((a, b) => a + b, 0) / windows.length;
+    log(`   per-second windows: n=${windows.length}  mean=${fmt(mean)}  min=${fmt(min)}  max=${fmt(max)}  drift=${(((max - min) / mean) * 100).toFixed(1)}%`);
+    log(`   final table size: ${fmt(id)} rows`);
+    db.free?.();
+  }
+
+  log("=".repeat(96));
+  log("done.");
+  document.getElementById("copy").hidden = false;
+}
+
+document.getElementById("run").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  e.target.textContent = "running…";
+  try { await bench(); } catch (err) { log("ERROR: " + (err?.stack || err)); }
+  e.target.disabled = false;
+  e.target.textContent = "Run again";
+});
+document.getElementById("copy").addEventListener("click", () => {
+  navigator.clipboard.writeText(out.textContent);
+});
+</script>

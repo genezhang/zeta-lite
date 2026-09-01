@@ -1,0 +1,402 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>zeta-lite in-browser endurance (soak)</title>
+<style>
+  body { font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 1.5rem; max-width: 1000px; }
+  h1 { font-size: 1.15rem; margin-bottom: .2rem; }
+  .sub { color: #888; margin: 0 0 1rem; }
+  .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+  label { color: #555; }
+  input[type=number] { font: inherit; width: 5rem; padding: .2rem .4rem; }
+  button { font: inherit; padding: .5rem 1.1rem; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-left: .5rem; color: #2563eb; }
+  #out { white-space: pre; background: #0f0f11; color: #d4d4d4; padding: 1rem; border-radius: 6px; overflow-x: auto; margin-top: 1rem; min-height: 8rem; }
+  .warn { color: #b45309; }
+</style>
+<h1>zeta-lite — in-browser endurance (soak) test</h1>
+<p class="sub">Ports the native <code>endurance.mjs</code> to a real browser tab. Measures throughput
+stability, <b>wasm linear-memory</b> growth (sustained vs. read-only settle — the leak check), and
+<b>real OPFS</b> snapshot round-trip latency. Same schema and 62/15/5/10/3/5 workload as native.</p>
+
+<div class="row">
+  <label>Sustained minutes <input id="mins" type="number" value="10" min="1" max="60" step="1"></label>
+  <label>Rows/table <input id="rows" type="number" value="20000" min="1000" max="200000" step="1000"></label>
+  <label>Rate ops/s <input id="rate" type="number" value="1500" min="0" max="50000" step="100"></label>
+  <button id="run">Run soak</button>
+  <span id="status">idle</span>
+</div>
+<p class="sub warn">Keep this tab <b>foreground</b> — background tabs throttle timers and invalidate a soak.
+A 10-minute run does ~10 min of work; the page stays responsive (it yields between windows).</p>
+<div id="out">Results appear here. When done, select-all + copy the block and paste it back.</div>
+
+<script type="module">
+import init, { ZetaDb } from "./pkg-web/zeta_wasm.js";
+import { saveToOpfs, loadFromOpfs, deleteFromOpfs } from "./opfs.mjs";
+
+const out = document.getElementById("out");
+const statusEl = document.getElementById("status");
+const lines = [];
+const log = (s = "") => { lines.push(s); out.textContent = lines.join("\n"); };
+const setStatus = (s) => { statusEl.textContent = s; };
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
+const now = () => performance.now();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── linear-memory footprint (the browser analogue of process.rss) ──────────
+// wasm-bindgen's default export exposes the WebAssembly.Memory as the module's
+// `memory`. We capture it from init()'s return value.
+let wasmMemory = null;
+const memMB = () => wasmMemory ? wasmMemory.buffer.byteLength / 1048576 : 0;
+
+// ── log-spaced histogram (identical to native harness) ─────────────────────
+class LogHist {
+  constructor() { this.bins = new Float64Array(256); this.total = 0; this.min = Infinity; this.max = 0; this.sum = 0; }
+  add(xUs) {
+    this.total++; if (xUs < this.min) this.min = xUs; if (xUs > this.max) this.max = xUs; this.sum += xUs;
+    let b = Math.floor((Math.log(Math.max(xUs, 1)) / Math.LN2) * 12.8);
+    if (b < 0) b = 0; if (b > 255) b = 255; this.bins[b]++;
+  }
+  quantile(q) {
+    const target = this.total * q; let cum = 0;
+    for (let b = 0; b < 256; b++) { cum += this.bins[b]; if (cum >= target) {
+      const lo = Math.pow(2, b / 12.8), hi = Math.pow(2, (b + 1) / 12.8); return Math.sqrt(lo * hi);
+    } }
+    return this.max;
+  }
+  get mean() { return this.total ? this.sum / this.total : 0; }
+}
+
+const CLASSES = ["point_read", "range_scan", "insert", "update", "delete", "txn"];
+
+async function soak(cfg) {
+  await init().then((o) => { wasmMemory = o.memory; });
+  if (!wasmMemory) log("(warning: could not capture wasm memory; footprint will read 0)");
+
+  const hist = Object.fromEntries(CLASSES.map((c) => [c, new LogHist()]));
+  const buckets = [];        // { t, phase, ops, mem }
+  const snapshotCycles = []; // { t, blobBytes, exportMs, opfsSaveMs, opfsLoadMs, verifyMs }
+  const failures = [];
+  let stopRequested = false;
+  let totalOps = 0;
+  const check = (cond, msg) => { if (!cond) { failures.push(msg); console.error("INVARIANT FAIL:", msg); stopRequested = true; } };
+
+  const t0 = now();
+  log("=".repeat(92));
+  log("zeta-lite in-browser endurance (soak)");
+  log(`UA: ${navigator.userAgent}`);
+  log(`crossOriginIsolated: ${self.crossOriginIsolated}  hardwareConcurrency: ${navigator.hardwareConcurrency}`);
+  log(`config: ${cfg.sustainedMs / 1000}s sustained, ${fmt(cfg.rows)} rows/table, rate ${cfg.rate} ops/s, ` +
+      `settle mem budget +${cfg.settleMemBudgetMB} MB`);
+  log("=".repeat(92));
+
+  const db = ZetaDb.open();
+  db.execDdl("CREATE TABLE ledger (id INTEGER PRIMARY KEY, v BIGINT)");
+  db.execDdl("CREATE TABLE churn (id INTEGER PRIMARY KEY, grp INTEGER, v BIGINT)");
+  db.execDdl("CREATE TABLE txns (id INTEGER PRIMARY KEY, ledger_id INTEGER, amount BIGINT)");
+  db.execDdl("CREATE TABLE branchy (id INTEGER PRIMARY KEY, v INTEGER)");
+
+  { const CHUNK = 200; const tx = db.begin();
+    for (let base = 1; base <= cfg.rows; base += CHUNK) {
+      const end = Math.min(base + CHUNK, cfg.rows + 1); const lv = [], cv = [];
+      for (let id = base; id < end; id++) { lv.push(`(${id},${id})`); cv.push(`(${id},${id % 64},${id})`); }
+      tx.execMut(`INSERT INTO ledger (id, v) VALUES ${lv.join(",")}`);
+      tx.execMut(`INSERT INTO churn (id, grp, v) VALUES ${cv.join(",")}`);
+    }
+    for (let id = 1; id <= 10; id++) tx.execMut("INSERT INTO branchy (id, v) VALUES ($1, $1)", [id]);
+    tx.commit();
+  }
+  log(`setup: seeded ${fmt(cfg.rows)} rows x2 + 10 branchy in ${((now() - t0) / 1000).toFixed(1)}s`);
+
+  // JS-side invariant model
+  let ledgerCount = cfg.rows, ledgerSum = (cfg.rows * (cfg.rows + 1)) / 2, nextLedgerId = cfg.rows + 1;
+  let churnMaxId = cfg.rows, nextChurnId = cfg.rows + 1, txnsCount = 0, nextTxnId = 1;
+  let branchyMainCount = 10, nextBranchyId = 100_000;
+
+  const WEIGHTS = [62, 15, 5, 10, 3, 5];
+  const pickClass = () => { let r = Math.random() * 100; for (let i = 0; i < 6; i++) { r -= WEIGHTS[i]; if (r < 0) return i; } return 0; };
+  const randId = (max) => 1 + Math.floor(Math.random() * max);
+
+  function runOp(cls, record = true) {
+    const t = now();
+    switch (cls) {
+      case 0: { const r = db.query("SELECT v FROM churn WHERE id = $1", [randId(churnMaxId)]);
+        if (r.rows.length > 1) check(false, "point read returned >1 row"); break; }
+      case 1: { const base = randId(churnMaxId - 32);
+        const r = db.query("SELECT id, v, grp FROM churn WHERE id >= $1 AND id < $2", [base, base + 32]);
+        if (r.rows.length > 32) check(false, "range scan exceeded 32 rows");
+        for (let i = 1; i < r.rows.length; i++) if (r.rows[i].id <= r.rows[i - 1].id) { check(false, "range scan rows out of order"); break; }
+        break; }
+      case 2: { const id = nextLedgerId++; const n = db.execMut("INSERT INTO ledger (id, v) VALUES ($1, $1)", [id]);
+        if (n !== 1) check(false, `ledger insert affected ${n} rows`); ledgerCount++; ledgerSum += id; break; }
+      case 3: { const n = db.execMut("UPDATE churn SET v = v + 1 WHERE id = $1", [randId(churnMaxId)]);
+        if (n > 1) check(false, `churn update affected ${n} rows`); break; }
+      case 4: { const n = db.execMut("DELETE FROM churn WHERE id = $1", [randId(churnMaxId)]);
+        if (n > 1) check(false, `churn delete affected ${n} rows`);
+        if (n === 1) { const id = nextChurnId++; churnMaxId = Math.max(churnMaxId, id);
+          const m = db.execMut("INSERT INTO churn (id, grp, v) VALUES ($1, $2, $3)", [id, randId(64), id]);
+          if (m !== 1) check(false, `churn reinsert affected ${m} rows`); }
+        break; }
+      case 5: { const tx = db.begin();
+        tx.execMut("INSERT INTO txns (id, ledger_id, amount) VALUES ($1, $2, $3)", [nextTxnId++, randId(ledgerCount), randId(1000)]);
+        tx.savepoint("sp");
+        tx.execMut("INSERT INTO txns (id, ledger_id, amount) VALUES ($1, $2, $3)", [nextTxnId++, randId(ledgerCount), randId(1000)]);
+        if (Math.random() < 0.5) { tx.rollbackToSavepoint("sp"); txnsCount += 1; }
+        else { tx.releaseSavepoint("sp"); txnsCount += 2; }
+        tx.commit(); break; }
+    }
+    if (record) hist[CLASSES[cls]].add((now() - t) * 1000);
+    totalOps++;
+  }
+
+  function checkpoint(where) {
+    const lc = db.query("SELECT COUNT(*) AS c FROM ledger").rows[0].c;
+    const ls = db.query("SELECT SUM(v) AS s FROM ledger").rows[0].s;
+    const cc = db.query("SELECT COUNT(*) AS c FROM churn").rows[0].c;
+    const tc = db.query("SELECT COUNT(*) AS c FROM txns").rows[0].c;
+    check(lc === ledgerCount, `[${where}] ledger count ${lc} != model ${ledgerCount}`);
+    check(String(ls) === String(ledgerSum), `[${where}] ledger sum ${ls} != model ${ledgerSum}`);
+    check(cc === cfg.rows, `[${where}] churn count ${cc} != ${cfg.rows}`);
+    check(tc === txnsCount, `[${where}] txns count ${tc} != model ${txnsCount}`);
+  }
+
+  // Snapshot cycle — with a REAL OPFS round-trip (export → save → load → open →
+  // verify), the measurement the native harness cannot make. Falls back to an
+  // in-memory rehydrate if OPFS is unavailable.
+  const OPFS_NAME = "endurance_soak.zeta";
+  let opfsOk = true;
+  async function snapshotCycle(where) {
+    const tExport = now(); const blob = db.exportSnapshot(); const exportMs = now() - tExport;
+    let opfsSaveMs = 0, opfsLoadMs = 0; let restored = blob;
+    if (opfsOk) {
+      try {
+        const tSave = now(); await saveToOpfs(OPFS_NAME, blob); opfsSaveMs = now() - tSave;
+        const tLoad = now(); restored = await loadFromOpfs(OPFS_NAME); opfsLoadMs = now() - tLoad;
+      } catch (e) { opfsOk = false; log(`  (OPFS unavailable — ${e.message}; timing export+rehydrate only)`); restored = blob; }
+    }
+    const tVerify = now();
+    const db2 = ZetaDb.openFromSnapshot(restored);
+    const lc = db2.query("SELECT COUNT(*) AS c FROM ledger").rows[0].c;
+    const ls = db2.query("SELECT SUM(v) AS s FROM ledger").rows[0].s;
+    const cc = db2.query("SELECT COUNT(*) AS c FROM churn").rows[0].c;
+    const tc = db2.query("SELECT COUNT(*) AS c FROM txns").rows[0].c;
+    db2.free?.();
+    const verifyMs = now() - tVerify;
+    snapshotCycles.push({ t: Math.round(now() - t0), blobBytes: blob.length,
+      exportMs: +exportMs.toFixed(1), opfsSaveMs: +opfsSaveMs.toFixed(1), opfsLoadMs: +opfsLoadMs.toFixed(1), verifyMs: +verifyMs.toFixed(1) });
+    check(lc === ledgerCount && String(ls) === String(ledgerSum) && cc === cfg.rows && tc === txnsCount,
+      `[${where}] snapshot round-trip mismatch (ledger ${lc}/${ls}, churn ${cc}, txns ${tc})`);
+  }
+
+  // ── phases 2+3: warmup + sustained ───────────────────────────────────────
+  // Browser adaptation: we cannot busy-spin the main thread for minutes (it
+  // freezes the tab). Instead we run in ~40ms work-slices and `await sleep`
+  // between them, both to yield to the event loop AND to pace toward `rate`.
+  const readerTxn = db.begin();
+  let phase = "warmup", warmupOps = 0;
+  let bucketStart = now(), bucketOps = 0;
+  let lastReader = bucketStart, lastSnapshot = bucketStart, lastCheckpoint = bucketStart, lastProgress = bucketStart;
+  const warmupEnd = t0 + cfg.warmupMs, sustainedEnd = t0 + cfg.warmupMs + cfg.sustainedMs;
+  const readerWindowEnd = warmupEnd + cfg.readerWindowMs;
+  let readerClosed = false;
+
+  log("sustained workload running… (tab must stay foreground)");
+  const loopStart = now();
+  const SLICE_MS = 40; // work slice before yielding
+
+  while (now() < sustainedEnd && !stopRequested) {
+    // run a slice of ops, then yield
+    const sliceEnd = Math.min(now() + SLICE_MS, sustainedEnd);
+    while (now() < sliceEnd) {
+      if (phase === "warmup" && now() >= warmupEnd) { phase = "sustained"; warmupOps = totalOps; }
+      runOp(pickClass(), phase === "sustained");
+      bucketOps++;
+      // pace toward target rate (skip if rate=0/unlimited)
+      if (cfg.rate > 0 && totalOps >= (now() - loopStart) / 1000 * cfg.rate) break;
+    }
+    const n = now();
+
+    if (!readerClosed && n >= readerWindowEnd) {
+      readerTxn.rollback(); readerClosed = true;
+      log(`  reader pin released after ${Math.round((n - warmupEnd) / 1000)}s window`);
+    }
+    if (!readerClosed && n - lastReader >= cfg.readerEveryMs) {
+      lastReader = n;
+      const r1 = readerTxn.query("SELECT v FROM ledger WHERE id = 1");
+      check(r1.rows.length === 1 && r1.rows[0].v === 1, "long-lived reader must see ledger row 1 with v=1");
+      const r2 = readerTxn.query("SELECT COUNT(*) AS c FROM ledger");
+      check(r2.rows[0].c === cfg.rows, `long-lived reader snapshot must stay pinned at ${cfg.rows} (saw ${r2.rows[0].c})`);
+    }
+    if (phase === "sustained" && n - lastSnapshot >= cfg.snapshotEveryMs) {
+      lastSnapshot = n; await snapshotCycle(`snap@${Math.round((n - t0) / 1000)}s`);
+    }
+    if (n - lastCheckpoint >= cfg.bucketMs) { lastCheckpoint = n; checkpoint(`t=${Math.round((n - t0) / 1000)}s`); }
+    if (n - bucketStart >= cfg.bucketMs) {
+      buckets.push({ t: Math.round(bucketStart - t0), phase, ops: bucketOps, mem: +memMB().toFixed(1) });
+      bucketStart = n; bucketOps = 0;
+    }
+    if (n - lastProgress >= 15_000) {
+      lastProgress = n;
+      const recent = buckets.slice(-3).reduce((a, b) => a + b.ops, 0);
+      const msg = `  t=${Math.round((n - t0) / 1000)}s ${phase} ops=${fmt(totalOps)} ~${Math.round(recent / 15)} ops/s mem=${memMB().toFixed(0)}MB`;
+      log(msg); setStatus(`running… ${Math.round((n - t0) / 1000)}s / ${Math.round((cfg.warmupMs + cfg.sustainedMs) / 1000)}s`);
+    }
+
+    // yield to the event loop; when paced, sleep the remaining budget
+    if (cfg.rate > 0) {
+      const targetMs = loopStart + (totalOps / cfg.rate) * 1000;
+      const wait = targetMs - now();
+      await sleep(wait > 0 ? Math.min(wait, 250) : 0);
+    } else {
+      await sleep(0);
+    }
+  }
+  const sustainedOps = totalOps - warmupOps;
+  if (!readerClosed) { readerTxn.rollback(); readerClosed = true; }
+
+  // ── phase 4: branch churn ────────────────────────────────────────────────
+  log(`branch churn: ${cfg.branchMs / 1000}s`);
+  let branchIter = 0, branchMerges = 0, branchDrops = 0;
+  const branchEnd = now() + cfg.branchMs;
+  while (now() < branchEnd && !stopRequested) {
+    const sliceEnd = Math.min(now() + SLICE_MS, branchEnd);
+    while (now() < sliceEnd) {
+      branchIter++;
+      db.execDdl("CREATE BRANCH endurance_b"); db.setBranch("endurance_b");
+      for (let i = 0; i < 50; i++) db.execMut("INSERT INTO branchy (id, v) VALUES ($1, $1)", [nextBranchyId++]);
+      db.setBranch(null);
+      const iso = db.query("SELECT COUNT(*) AS c FROM branchy").rows[0].c;
+      check(iso === branchyMainCount, `branch ${branchIter}: isolation broken — main at ${iso}, expected ${branchyMainCount}`);
+      if (branchIter % 2 === 0) {
+        const report = db.query("MERGE BRANCH endurance_b");
+        check(report.rows.length === 0, `branch ${branchIter}: merge reported conflicts`);
+        branchyMainCount += 50; branchMerges++;
+      } else { db.execDdl("DROP BRANCH endurance_b"); branchDrops++; }
+      const after = db.query("SELECT COUNT(*) AS c FROM branchy").rows[0].c;
+      check(after === branchyMainCount, `branch ${branchIter}: main at ${after}, expected ${branchyMainCount}`);
+      if (stopRequested) break;
+    }
+    await sleep(0);
+  }
+  log(`branch churn done: ${branchIter} cycles (${branchMerges} merges, ${branchDrops} drops)`);
+
+  // ── phase 4.5: drain (read-only) ─────────────────────────────────────────
+  log(`drain: ${cfg.drainMs / 1000}s read-only`);
+  const drainStart = now(); let drainOps = 0;
+  while (now() - drainStart < cfg.drainMs && !stopRequested) {
+    const sliceEnd = Math.min(now() + SLICE_MS, drainStart + cfg.drainMs);
+    while (now() < sliceEnd) { runOp(Math.random() < 0.7 ? 0 : 1, false); drainOps++; }
+    await sleep(0);
+  }
+  const drainMem = +memMB().toFixed(1);
+  log(`drain done: ${fmt(drainOps)} reads, mem=${drainMem.toFixed(0)}MB`);
+
+  // ── phase 5: settle (read-only) — the leak check ─────────────────────────
+  log(`settle: ${cfg.settleMs / 1000}s read-only`);
+  const settleStart = now(); const settleMem = []; let settleOps = 0;
+  const settleRate = 2000;
+  while (now() - settleStart < cfg.settleMs && !stopRequested) {
+    const sliceEnd = Math.min(now() + SLICE_MS, settleStart + cfg.settleMs);
+    while (now() < sliceEnd) {
+      runOp(Math.random() < 0.7 ? 0 : 1, false); settleOps++;
+      if (settleOps >= (now() - settleStart) / 1000 * settleRate) break;
+    }
+    if (settleMem.length === 0 || now() - settleStart - (settleMem.length - 1) * 1000 >= 1000) settleMem.push(+memMB().toFixed(1));
+    const targetMs = settleStart + (settleOps / settleRate) * 1000;
+    const wait = targetMs - now();
+    await sleep(wait > 0 ? Math.min(wait, 250) : 0);
+  }
+  const settleGrowthMB = settleMem.length > 1 ? +(settleMem[settleMem.length - 1] - settleMem[0]).toFixed(1) : 0;
+  log(`settle done: ${fmt(settleOps)} reads, mem ${settleMem[0] ?? "?"}MB -> ${settleMem[settleMem.length - 1] ?? "?"}MB (${settleGrowthMB >= 0 ? "+" : ""}${settleGrowthMB} MB)`);
+
+  // ── phase 6: final verification ──────────────────────────────────────────
+  checkpoint("final");
+  { const cur = db.stream("SELECT id, v FROM ledger"); let seen = 0;
+    for (let row = cur.next(); row !== null; row = cur.next()) { seen++; if (row.v !== row.id && seen <= 1000) check(false, `streamed ledger row ${row.id} has v=${row.v}`); }
+    check(seen === ledgerCount, `streaming scan saw ${seen} rows, expected ${ledgerCount}`); cur.free?.(); }
+  { for (let i = 0; i < 100; i++) { const id = randId(ledgerCount); const r = db.query("SELECT v FROM ledger WHERE id = $1", [id]);
+      if (r.rows.length !== 1 || r.rows[0].v !== id) { check(false, `spot check: ledger id=${id}`); break; } } }
+  if (opfsOk) { try { await deleteFromOpfs(OPFS_NAME); } catch {} }
+
+  // ── verdict ──────────────────────────────────────────────────────────────
+  const sustainedBuckets = buckets.filter((b) => b.phase === "sustained");
+  const qn = Math.max(1, Math.floor(sustainedBuckets.length / 4));
+  const rate = (bs) => bs.reduce((a, b) => a + b.ops, 0) / (bs.length * (cfg.bucketMs / 1000));
+  const firstRate = rate(sustainedBuckets.slice(0, qn)), lastRate = rate(sustainedBuckets.slice(-qn));
+  const stability = firstRate > 0 ? lastRate / firstRate : 1;
+  const memS = sustainedBuckets.map((b) => b.mem);
+  const mm = Math.min(12, Math.floor(memS.length / 3));
+  const firstMem = mm > 0 ? memS.slice(0, mm).reduce((a, b) => a + b, 0) / mm : 0;
+  const lastMem = mm > 0 ? memS.slice(-mm).reduce((a, b) => a + b, 0) / mm : 0;
+  const criteria = {
+    "no SQL errors / invariants": failures.length === 0,
+    "throughput stability >= 70%": stability >= cfg.stabilityFloor,
+    [`settle mem growth < ${cfg.settleMemBudgetMB} MB`]: settleGrowthMB < cfg.settleMemBudgetMB,
+  };
+  const pass = Object.values(criteria).every(Boolean);
+  const totalS = (now() - t0) / 1000;
+
+  log("");
+  log("── zeta-lite in-browser endurance report ─────────────────────────────");
+  log(`run: ${totalS.toFixed(0)}s total, ${fmt(sustainedOps)} sustained ops (${(sustainedOps / (cfg.sustainedMs / 1000)).toFixed(0)} ops/s avg), ${branchIter} branch cycles, ${snapshotCycles.length} snapshot cycles`);
+  log("");
+  log("op class            ops      mean(µs)   p50(µs)   p95(µs)   p99(µs)");
+  for (const c of CLASSES) { const h = hist[c];
+    log(`${c.padEnd(18)} ${String(h.total).padStart(8)} ${String(Math.round(h.mean)).padStart(10)} ${String(Math.round(h.quantile(0.5))).padStart(9)} ${String(Math.round(h.quantile(0.95))).padStart(9)} ${String(Math.round(h.quantile(0.99))).padStart(9)}`);
+  }
+  log("");
+  log(`throughput: first quarter ${firstRate.toFixed(0)} ops/s -> last quarter ${lastRate.toFixed(0)} ops/s (stability ${stability.toFixed(2)}, floor ${cfg.stabilityFloor})`);
+  log(`linear memory (sustained, informational): ${firstMem.toFixed(0)} MB (first ~60s) -> ${lastMem.toFixed(0)} MB (last ~60s) = ${(lastMem - firstMem) >= 0 ? "+" : ""}${(lastMem - firstMem).toFixed(1)} MB (data-driven: rows + log + reader-pinned versions; wasm linear memory never shrinks)`);
+  log(`linear memory (settle, judged): ${settleGrowthMB >= 0 ? "+" : ""}${settleGrowthMB} MB over ${cfg.settleMs / 1000}s read-only (budget +${cfg.settleMemBudgetMB} MB)`);
+  if (snapshotCycles.length) {
+    const avg = (k) => snapshotCycles.reduce((a, b) => a + b[k], 0) / snapshotCycles.length;
+    const maxKB = Math.max(...snapshotCycles.map((b) => b.blobBytes)) / 1024;
+    log(`snapshot cycles: ${snapshotCycles.length}, max blob ${maxKB.toFixed(0)} KB`);
+    log(`  export avg ${avg("exportMs").toFixed(1)} ms  |  OPFS save avg ${avg("opfsSaveMs").toFixed(1)} ms  |  OPFS load avg ${avg("opfsLoadMs").toFixed(1)} ms  |  open+verify avg ${avg("verifyMs").toFixed(1)} ms`);
+    log(`  (real OPFS round-trip = export + save + load + open; native harness measures export+open only)`);
+  }
+  log("");
+  log("verdict:");
+  for (const [k, v] of Object.entries(criteria)) log(`  ${v ? "PASS" : "FAIL"}  ${k}`);
+  if (failures.length) { log("first failures:"); for (const f of failures.slice(0, 5)) log(`  - ${f}`); }
+  log("");
+  log(`${pass ? "OK" : "FAILED"}: zeta-lite in-browser endurance ${pass ? "passed" : "failed"} (${totalS.toFixed(0)}s)`);
+  log("=".repeat(92));
+
+  // machine-readable block for pasting/recording
+  const report = { env: { ua: navigator.userAgent, crossOriginIsolated: self.crossOriginIsolated },
+    config: cfg, totals: { sustainedOps, branchIterations: branchIter, snapshotCycles: snapshotCycles.length, durationS: Math.round(totalS) },
+    perClass: Object.fromEntries(CLASSES.map((c) => [c, { ops: hist[c].total, meanUs: Math.round(hist[c].mean), p50Us: Math.round(hist[c].quantile(0.5)), p95Us: Math.round(hist[c].quantile(0.95)), p99Us: Math.round(hist[c].quantile(0.99)) }])),
+    throughput: { firstQuarterOpsS: Math.round(firstRate), lastQuarterOpsS: Math.round(lastRate), stability },
+    memory: { sustainedFirstMB: Math.round(firstMem), sustainedLastMB: Math.round(lastMem), settleGrowthMB, settleCurveMB: settleMem, drainMemMB: drainMem },
+    buckets, snapshotCycles, failures, pass };
+  log("");
+  log("--- JSON report (copy for docs/benchmarks/) ---");
+  log(JSON.stringify(report));
+  return pass;
+}
+
+document.getElementById("run").addEventListener("click", async (e) => {
+  const btn = e.target; btn.disabled = true;
+  lines.length = 0; out.textContent = "";
+  const mins = Math.max(1, Number(document.getElementById("mins").value) || 10);
+  const rows = Math.max(1000, Number(document.getElementById("rows").value) || 20000);
+  const rate = Math.max(0, Number(document.getElementById("rate").value) || 1500);
+  // Phase durations scale with the sustained length, mirroring the native --fast/standard ratios.
+  const cfg = {
+    rows, rate, stabilityFloor: 0.7, settleMemBudgetMB: 32,
+    warmupMs: 15_000,
+    sustainedMs: mins * 60_000,
+    branchMs: 120_000,
+    snapshotEveryMs: 60_000,
+    readerEveryMs: 5_000,
+    readerWindowMs: 45_000,
+    bucketMs: 5_000,
+    drainMs: 30_000,
+    settleMs: 60_000,
+  };
+  try { const pass = await soak(cfg); setStatus(pass ? "done — PASS" : "done — FAILED"); }
+  catch (err) { log("ERROR: " + (err?.stack || err)); setStatus("error"); }
+  btn.disabled = false;
+});
+</script>
